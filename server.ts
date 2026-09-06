@@ -127,10 +127,17 @@ ${
 - Preserve formatting: ${preserveFormatting ? "YES" : "NO"}.
 ${preserveFormatting ? "Strictly preserve all Markdown markup (headers, bold/italics, bullet points, links, code blocks) and HTML tags intact without altering tags." : "Output plain text."}
 
-8. TYPOGRAPHIC CONVENTIONS (Russian Localization):
+8. TYPOGRAPHIC CONVENTIONS & PUNCTUATION (Russian Academic Standard / D.E. Rosenthal):
 - Russian quotes: Use «ёлочки» for outer quotes and „лапки“ for nested quotes (never plain straight ASCII quotes in Russian).
 - Dash: Use em-dash (—) with a preceding non-breaking space for Russian clauses, dialogues, and definitions.
-- Punctuation order: in Russian, period and comma are placed AFTER the closing quote («пример»., «пример»,), unlike American English ("example.").
+- Punctuation with quotes (Rosenthal standard):
+  * When a quoted phrase, term, or sentence is integrated into the larger sentence, the closing punctuation mark (period or comma) belongs to the overall sentence and is placed STRICTLY AFTER the closing quote:
+    - Правильно: Он охарактеризовал это как «очередной провал». (НЕ «...провал.»)
+    - Правильно: В статье «Кризис идей», опубликованной вчера, автор затронул... (НЕ «...идей,» автор)
+  * Never copy the American quotation convention ("word," "word.") into Russian: commas and periods placed before the closing quote are considered a typographic calque defect in Russian.
+  * If the quoted passage is a self-contained sentence ending with its own exclamation mark, question mark, or ellipsis, that mark remains INSIDE the quotes, and NO trailing period is added after the closing quote:
+    - Правильно: Он резко выкрикнул: «Берегись!» (без точки после кавычки)
+    - Правильно: Возник закономерный вопрос: «Что делать дальше?» (без точки после кавычки)
 
 9. EXPLANATIONS & ALTERNATIVES:
 ${explainDecisions ? "- In the decisions field, briefly explain the most interesting or difficult translation choices (idioms, cultural adaptations, wordplay, false friends, syntax shifts)." : "- You may keep decisions minimal."}
@@ -258,8 +265,12 @@ All reasons and summaries should be written in Russian.`;
 
     const prompt = `SOURCE TEXT:\n${sourceText}\n\nDRAFT TRANSLATION TO REVIEW:\n${draftText}`;
 
+    // Model selection validation
+    const allowedModels = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
+    const chosenModel = allowedModels.includes(model) ? model : "gemini-3.8-flash";
+
     const response = await ai.models.generateContent({
-      model: model || "gemini-3.8-flash",
+      model: chosenModel,
       contents: prompt,
       config: {
         systemInstruction,

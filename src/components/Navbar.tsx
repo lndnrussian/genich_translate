@@ -179,8 +179,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               onChange={(e) => onUpdateSettings({ model: e.target.value })}
               className="bg-transparent text-[#1a1a1a] font-mono text-[11px] focus:outline-none cursor-pointer"
             >
-              <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
-              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
+              <option value="gemini-3.8-flash">Gemini 3.8 Flash (Default)</option>
+              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (Fast)</option>
+              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Preview)</option>
             </select>
           </div>
 
