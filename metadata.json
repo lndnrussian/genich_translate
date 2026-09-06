@@ -1,0 +1,6 @@
+{
+  "name": "RU-EN Professional Translation Studio",
+  "description": "Специализированная среда профессионального перевода RU ↔ EN с точной стилистической калибровкой, глоссарием, гендерными формами, типографикой и лингвистическим анализом.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
