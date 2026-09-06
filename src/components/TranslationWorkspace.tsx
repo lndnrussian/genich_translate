@@ -25,6 +25,8 @@ interface TranslationWorkspaceProps {
   settings: TranslationSettings;
   processingTimeMs?: number;
   detectedDirection?: 'ru-en' | 'en-ru';
+  usedModel?: string;
+  wasFallback?: boolean;
 }
 
 const SAMPLE_TEXTS: Array<{ label: string; text: string; dir: 'ru-en' | 'en-ru' }> = [
@@ -60,6 +62,8 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
   settings,
   processingTimeMs,
   detectedDirection,
+  usedModel,
+  wasFallback,
 }) => {
   const [copied, setCopied] = useState(false);
   const [typographyApplied, setTypographyApplied] = useState(false);
@@ -320,11 +324,25 @@ export const TranslationWorkspace: React.FC<TranslationWorkspaceProps> = ({
               <span>{targetWords} words</span>
             </div>
 
-            {processingTimeMs && processingTimeMs > 0 && (
-              <span className="text-[#6b7280] font-mono text-[11px]">
-                Latency: {(processingTimeMs / 1000).toFixed(2)}s
-              </span>
-            )}
+            <div className="flex items-center gap-2.5">
+              {usedModel && (
+                wasFallback ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#fef3c7] text-[#92400e] border border-[#fde68a] text-[10px] font-mono font-medium shadow-2xs" title="Основная модель была временно перегружена, использована резервная модель">
+                    ⚠ Резервная модель: {usedModel}
+                  </span>
+                ) : (
+                  <span className="text-[#6b7280] font-mono text-[11px]">
+                    Модель: {usedModel}
+                  </span>
+                )
+              )}
+
+              {processingTimeMs && processingTimeMs > 0 && (
+                <span className="text-[#6b7280] font-mono text-[11px]">
+                  Latency: {(processingTimeMs / 1000).toFixed(2)}s
+                </span>
+              )}
+            </div>
           </div>
 
         </div>

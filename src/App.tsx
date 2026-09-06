@@ -245,6 +245,8 @@ export default function App() {
               settings={settings}
               processingTimeMs={translationResult?.processingTimeMs}
               detectedDirection={translationResult?.detectedDirection}
+              usedModel={translationResult?.usedModel}
+              wasFallback={translationResult?.wasFallback}
             />
 
             {/* Explanations and Alternatives */}

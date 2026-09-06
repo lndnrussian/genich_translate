@@ -274,6 +274,29 @@ export const ReviewWorkspace: React.FC<ReviewWorkspaceProps> = ({
             </div>
           </div>
 
+          {/* Footer Stats / Model Badge */}
+          <div className="pt-3 border-t border-[#e5e7eb] flex items-center justify-between text-xs text-[#6b7280]">
+            <div className="flex items-center gap-2.5">
+              {reviewResult.usedModel && (
+                reviewResult.wasFallback ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#fef3c7] text-[#92400e] border border-[#fde68a] text-[10px] font-mono font-medium shadow-2xs" title="Основная модель была временно перегружена, использована резервная модель">
+                    ⚠ Резервная модель: {reviewResult.usedModel}
+                  </span>
+                ) : (
+                  <span className="text-[#6b7280] font-mono text-[11px]">
+                    Модель: {reviewResult.usedModel}
+                  </span>
+                )
+              )}
+            </div>
+
+            {reviewResult.processingTimeMs && reviewResult.processingTimeMs > 0 && (
+              <span className="text-[#6b7280] font-mono text-[11px]">
+                Latency: {(reviewResult.processingTimeMs / 1000).toFixed(2)}s
+              </span>
+            )}
+          </div>
+
         </div>
       )}
 
