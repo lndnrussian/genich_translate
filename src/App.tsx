@@ -26,7 +26,7 @@ import {
   clearHistory 
 } from './utils/storage';
 import { requestTranslation } from './services/api';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, RefreshCw, Zap, Info } from 'lucide-react';
 
 export default function App() {
   const [settings, setSettings] = useState<TranslationSettings>(getSavedSettings);
@@ -62,15 +62,20 @@ export default function App() {
     saveGlossary(newGlossary);
   };
 
-  // Perform translation
-  const handleTranslate = useCallback(async () => {
+  // Perform translation with optional model or settings override
+  const handleTranslate = useCallback(async (overrideSettings?: Partial<TranslationSettings>) => {
     if (!sourceText.trim() || isLoading) return;
+
+    const currentSettings = overrideSettings ? { ...settings, ...overrideSettings } : settings;
+    if (overrideSettings) {
+      handleUpdateSettings(overrideSettings);
+    }
 
     setIsLoading(true);
     setError(null);
 
     try {
-      const result = await requestTranslation(sourceText, settings, glossary);
+      const result = await requestTranslation(sourceText, currentSettings, glossary);
       setTranslationResult(result);
       setTranslatedText(result.translation);
 
@@ -80,12 +85,12 @@ export default function App() {
         timestamp: Date.now(),
         sourceText,
         translatedText: result.translation,
-        direction: settings.direction,
+        direction: currentSettings.direction,
         detectedDirection: result.detectedDirection,
-        register: settings.register,
-        literality: settings.literality,
+        register: currentSettings.register,
+        literality: currentSettings.literality,
         decisionsCount: result.decisions?.length || 0,
-        settingsSnapshot: { ...settings },
+        settingsSnapshot: { ...currentSettings },
       };
 
       saveHistoryItem(historyItem);
@@ -96,7 +101,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [sourceText, isLoading, settings, glossary]);
+  }, [sourceText, isLoading, settings, glossary, handleUpdateSettings]);
 
   // Apply alternative variant into active translated text
   const handleApplyAlternative = (originalFragment: string, replacement: string) => {
@@ -168,18 +173,61 @@ export default function App() {
       {/* Main App Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-5 lg:px-6 py-4 space-y-4">
         
-        {/* Error notification */}
+        {/* Error notification with action buttons */}
         {error && (
-          <div className="p-3 bg-[#fff5f5] border border-[#fecaca] rounded text-xs text-[#b91c1c] flex items-center justify-between shadow-2xs">
+          <div className="p-3.5 bg-[#fff5f5] border border-[#fecaca] rounded text-xs text-[#b91c1c] space-y-2.5 shadow-2xs">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-[#ef4444] shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{error}</span>
+              </div>
+              <button
+                onClick={() => setError(null)}
+                className="text-[#9ca3af] hover:text-[#4b5563] text-xs font-mono shrink-0 cursor-pointer"
+                title="Скрыть"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-[#fee2e2]">
+              <button
+                onClick={() => handleTranslate()}
+                disabled={isLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#ef4444] hover:bg-[#dc2626] text-white font-medium rounded text-[11px] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+                <span>Повторить запрос</span>
+              </button>
+
+              {settings.model !== 'gemini-3.1-flash-lite' && (
+                <button
+                  onClick={() => handleTranslate({ model: 'gemini-3.1-flash-lite' })}
+                  disabled={isLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-[#fef2f2] text-[#b91c1c] border border-[#fca5a5] font-medium rounded text-[11px] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Zap className="w-3 h-3 text-[#ea580c]" />
+                  <span>Переключить на Gemini 3.1 Flash-Lite и повторить</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Fallback notice */}
+        {translationResult?.wasFallback && (
+          <div className="px-3.5 py-2.5 bg-[#fefce8] border border-[#fef08a] rounded text-xs text-[#854d0e] flex items-center justify-between shadow-2xs">
             <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-[#ef4444] shrink-0" />
-              <span>{error}</span>
+              <Info className="w-4 h-4 text-[#eab308] shrink-0" />
+              <span>
+                Основная модель была временно перегружена. Перевод успешно выполнен с помощью резервной модели <strong>{translationResult.usedModel}</strong>.
+              </span>
             </div>
             <button
-              onClick={() => setError(null)}
-              className="text-[#ef4444] hover:text-[#991b1b] font-medium text-xs ml-4"
+              onClick={() => setTranslationResult(prev => prev ? { ...prev, wasFallback: false } : null)}
+              className="text-[#a16207] hover:text-[#713f12] text-xs font-mono shrink-0 cursor-pointer ml-3"
             >
-              Скрыть
+              ✕
             </button>
           </div>
         )}

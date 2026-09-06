@@ -27,6 +27,128 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
+// Helper to parse Gemini errors into human-friendly messages and appropriate HTTP status codes
+function parseGeminiError(error: any): { statusCode: number; userMessage: string } {
+  const rawMsg = error?.message || String(error || "");
+  let errorObj: any = null;
+  try {
+    const jsonMatch = rawMsg.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      errorObj = JSON.parse(jsonMatch[0]);
+    }
+  } catch {
+    // Ignore JSON parsing errors
+  }
+
+  const code = errorObj?.error?.code || error?.status || error?.statusCode || 500;
+  const status = errorObj?.error?.status || "";
+  const innerMsg = errorObj?.error?.message || rawMsg;
+
+  if (
+    code === 503 ||
+    status === "UNAVAILABLE" ||
+    innerMsg.includes("high demand") ||
+    innerMsg.includes("overloaded") ||
+    innerMsg.includes("temporary")
+  ) {
+    return {
+      statusCode: 503,
+      userMessage:
+        "Модель в настоящий момент испытывает временный пик нагрузки (503 Service Unavailable / High Demand). Пожалуйста, повторите запрос через несколько секунд или переключите модель на Gemini 3.1 Flash-Lite.",
+    };
+  }
+
+  if (code === 429 || status === "RESOURCE_EXHAUSTED" || innerMsg.includes("RESOURCE_EXHAUSTED")) {
+    return {
+      statusCode: 429,
+      userMessage:
+        "Превышен лимит запросов к модели (429 Rate Limit / Resource Exhausted). Пожалуйста, подождите несколько секунд и попробуйте снова.",
+    };
+  }
+
+  if (code === 400 || status === "INVALID_ARGUMENT") {
+    return {
+      statusCode: 400,
+      userMessage: `Некорректный запрос к модели: ${innerMsg}`,
+    };
+  }
+
+  return {
+    statusCode: typeof code === "number" && code >= 400 && code < 600 ? code : 500,
+    userMessage: innerMsg.length > 250 ? `${innerMsg.slice(0, 250)}...` : innerMsg,
+  };
+}
+
+// Call Gemini with automated retry, exponential backoff, and fallback models on 503/429
+async function generateContentWithRetryAndFallback(
+  ai: GoogleGenAI,
+  params: {
+    contents: any;
+    config: any;
+  },
+  primaryModel: string,
+  maxRetriesPerModel = 2
+) {
+  const modelsToTry = [primaryModel];
+
+  // If primary model is unavailable or overloaded, provide graceful fallbacks
+  if (primaryModel === "gemini-3.8-flash") {
+    modelsToTry.push("gemini-3.1-flash-lite");
+  } else if (primaryModel === "gemini-3.1-pro-preview") {
+    modelsToTry.push("gemini-3.8-flash", "gemini-3.1-flash-lite");
+  } else if (primaryModel === "gemini-3.1-flash-lite") {
+    modelsToTry.push("gemini-3.8-flash");
+  }
+
+  let lastError: any = null;
+
+  for (const currentModel of modelsToTry) {
+    for (let attempt = 0; attempt <= maxRetriesPerModel; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 300, 3500);
+          console.warn(
+            `[Gemini Retry] Retrying ${currentModel} (attempt ${attempt + 1}/${maxRetriesPerModel + 1}) after ${Math.round(delay)}ms...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+
+        const response = await ai.models.generateContent({
+          ...params,
+          model: currentModel,
+        });
+
+        return {
+          response,
+          usedModel: currentModel,
+          wasFallback: currentModel !== primaryModel,
+        };
+      } catch (err: any) {
+        lastError = err;
+        const errStr = err?.message || String(err);
+        const isTransient =
+          errStr.includes("503") ||
+          errStr.includes("UNAVAILABLE") ||
+          errStr.includes("high demand") ||
+          errStr.includes("429") ||
+          errStr.includes("RESOURCE_EXHAUSTED");
+
+        if (!isTransient) {
+          // Do not retry on non-transient errors (e.g. 400 schema error)
+          throw err;
+        }
+
+        console.warn(
+          `[Gemini Attempt Failed] Model ${currentModel}, attempt ${attempt + 1}: ${errStr.slice(0, 100)}`
+        );
+      }
+    }
+    console.warn(`[Gemini Fallback] Model ${currentModel} exhausted attempts. Trying next fallback model if available...`);
+  }
+
+  throw lastError;
+}
+
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
@@ -147,85 +269,92 @@ Return the response strictly conforming to the JSON schema.`;
 
     const prompt = `Translate the following source text:\n\n${text}`;
 
-    const response = await ai.models.generateContent({
-      model: chosenModel,
-      contents: prompt,
-      config: {
-        systemInstruction,
-        temperature: literality >= 4 ? 0.6 : 0.2,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            detectedDirection: {
-              type: Type.STRING,
-              description: "The detected translation direction: either 'ru-en' or 'en-ru'",
-            },
-            translation: {
-              type: Type.STRING,
-              description: "The finalized high-quality translation.",
-            },
-            decisions: {
-              type: Type.ARRAY,
-              description: "Explanations of key translation decisions, idioms, or cultural adaptations.",
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  sourceSegment: { type: Type.STRING },
-                  targetSegment: { type: Type.STRING },
-                  category: {
-                    type: Type.STRING,
-                    description: "One of: idiom, cultural, wordplay, syntax, false_friend, terminology, tone",
-                  },
-                  explanation: { type: Type.STRING, description: "Clear explanation in Russian for the translator" },
-                },
-                required: ["sourceSegment", "targetSegment", "category", "explanation"],
+    const { response, usedModel, wasFallback } = await generateContentWithRetryAndFallback(
+      ai,
+      {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          temperature: literality >= 4 ? 0.6 : 0.2,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              detectedDirection: {
+                type: Type.STRING,
+                description: "The detected translation direction: either 'ru-en' or 'en-ru'",
               },
-            },
-            alternatives: {
-              type: Type.ARRAY,
-              description: "Alternative renderings for specific phrases with nuance explanations.",
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  originalFragment: { type: Type.STRING },
-                  currentChoice: { type: Type.STRING },
-                  variants: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        text: { type: Type.STRING },
-                        nuance: { type: Type.STRING, description: "Brief description of the nuance/style" },
+              translation: {
+                type: Type.STRING,
+                description: "The finalized high-quality translation.",
+              },
+              decisions: {
+                type: Type.ARRAY,
+                description: "Explanations of key translation decisions, idioms, or cultural adaptations.",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    sourceSegment: { type: Type.STRING },
+                    targetSegment: { type: Type.STRING },
+                    category: {
+                      type: Type.STRING,
+                      description: "One of: idiom, cultural, wordplay, syntax, false_friend, terminology, tone",
+                    },
+                    explanation: { type: Type.STRING, description: "Clear explanation in Russian for the translator" },
+                  },
+                  required: ["sourceSegment", "targetSegment", "category", "explanation"],
+                },
+              },
+              alternatives: {
+                type: Type.ARRAY,
+                description: "Alternative renderings for specific phrases with nuance explanations.",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    originalFragment: { type: Type.STRING },
+                    currentChoice: { type: Type.STRING },
+                    variants: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          text: { type: Type.STRING },
+                          nuance: { type: Type.STRING, description: "Brief description of the nuance/style" },
+                        },
+                        required: ["text", "nuance"],
                       },
-                      required: ["text", "nuance"],
                     },
                   },
+                  required: ["originalFragment", "currentChoice", "variants"],
                 },
-                required: ["originalFragment", "currentChoice", "variants"],
+              },
+              generalNotes: {
+                type: Type.STRING,
+                description: "Optional overarching translator commentary or cultural notes.",
               },
             },
-            generalNotes: {
-              type: Type.STRING,
-              description: "Optional overarching translator commentary or cultural notes.",
-            },
+            required: ["detectedDirection", "translation", "decisions", "alternatives"],
           },
-          required: ["detectedDirection", "translation", "decisions", "alternatives"],
         },
       },
-    });
+      chosenModel
+    );
 
     const parsed = JSON.parse(response.text || "{}");
     const processingTimeMs = Date.now() - startTime;
 
     res.json({
       ...parsed,
+      usedModel,
+      wasFallback,
       processingTimeMs,
     });
   } catch (error: any) {
     console.error("Translation error:", error);
-    res.status(500).json({
-      error: error.message || "Failed to process translation request.",
+    const { statusCode, userMessage } = parseGeminiError(error);
+    res.status(statusCode).json({
+      error: userMessage,
+      statusCode,
     });
   }
 });
@@ -256,7 +385,7 @@ Evaluation criteria:
 1. Accuracy & completeness: any omissions, additions, or distortions of meaning.
 2. Register & Style: how well it adheres to register "${register}" and audience "${targetAudience}".
 3. Idiomaticity & Fluency: natural collocations, avoidance of calques/mechanical translation.
-4. Typography & Punctuation: Russian quotes (« »), em-dash (—), punctuation placement.
+4. Typography & Punctuation: Russian quotes (« »), em-dash (—), punctuation placement according to Rosenthal academic standard (period/comma strictly after closing quotes, no English-style calques with period/comma inside quotes).
 5. Glossary: Check if any of the following terms were violated:
 ${glossary.map((g: any) => `- "${g.source}" => "${g.target}"`).join("\n") || "None"}
 
@@ -269,66 +398,73 @@ All reasons and summaries should be written in Russian.`;
     const allowedModels = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
     const chosenModel = allowedModels.includes(model) ? model : "gemini-3.8-flash";
 
-    const response = await ai.models.generateContent({
-      model: chosenModel,
-      contents: prompt,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            overallScore: {
-              type: Type.NUMBER,
-              description: "Quality score from 1 to 10",
-            },
-            summary: {
-              type: Type.STRING,
-              description: "Overall editorial assessment in Russian",
-            },
-            strengths: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Notable strengths of the draft",
-            },
-            issues: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  original: { type: Type.STRING },
-                  draft: { type: Type.STRING },
-                  suggested: { type: Type.STRING },
-                  reason: { type: Type.STRING },
-                  severity: {
-                    type: Type.STRING,
-                    description: "'minor', 'medium', or 'critical'",
+    const { response, usedModel, wasFallback } = await generateContentWithRetryAndFallback(
+      ai,
+      {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              overallScore: {
+                type: Type.NUMBER,
+                description: "Quality score from 1 to 10",
+              },
+              summary: {
+                type: Type.STRING,
+                description: "Overall editorial assessment in Russian",
+              },
+              strengths: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Notable strengths of the draft",
+              },
+              issues: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    original: { type: Type.STRING },
+                    draft: { type: Type.STRING },
+                    suggested: { type: Type.STRING },
+                    reason: { type: Type.STRING },
+                    severity: {
+                      type: Type.STRING,
+                      description: "'minor', 'medium', or 'critical'",
+                    },
                   },
+                  required: ["original", "draft", "suggested", "reason", "severity"],
                 },
-                required: ["original", "draft", "suggested", "reason", "severity"],
+              },
+              improvedTranslation: {
+                type: Type.STRING,
+                description: "Refined, polished version of the translation",
               },
             },
-            improvedTranslation: {
-              type: Type.STRING,
-              description: "Refined, polished version of the translation",
-            },
+            required: ["overallScore", "summary", "strengths", "issues", "improvedTranslation"],
           },
-          required: ["overallScore", "summary", "strengths", "issues", "improvedTranslation"],
         },
       },
-    });
+      chosenModel
+    );
 
     const parsed = JSON.parse(response.text || "{}");
     const processingTimeMs = Date.now() - startTime;
 
     res.json({
       ...parsed,
+      usedModel,
+      wasFallback,
       processingTimeMs,
     });
   } catch (error: any) {
     console.error("Review error:", error);
-    res.status(500).json({
-      error: error.message || "Failed to process translation review.",
+    const { statusCode, userMessage } = parseGeminiError(error);
+    res.status(statusCode).json({
+      error: userMessage,
+      statusCode,
     });
   }
 });

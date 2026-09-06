@@ -73,6 +73,8 @@ export interface TranslationResult {
   alternatives: AlternativeVariant[];
   generalNotes?: string;
   processingTimeMs?: number;
+  usedModel?: string;
+  wasFallback?: boolean;
 }
 
 export interface ReviewIssue {
@@ -90,6 +92,8 @@ export interface ReviewResult {
   issues: ReviewIssue[];
   improvedTranslation: string;
   processingTimeMs?: number;
+  usedModel?: string;
+  wasFallback?: boolean;
 }
 
 export interface HistoryItem {
